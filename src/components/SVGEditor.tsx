@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { Canvas as FabricCanvas, FabricText, util } from 'fabric';
 import { FileUpload } from './FileUpload';
@@ -29,6 +28,8 @@ export const SVGEditor = () => {
   const [selectedElement, setSelectedElement] = useState<string | null>(null);
   const [mode, setMode] = useState<'preview' | 'edit'>('preview');
   const [originalSVG, setOriginalSVG] = useState<string>('');
+  // Map to track which Fabric object corresponds to which element ID
+  const [objectToElementMap, setObjectToElementMap] = useState<Map<FabricText, string>>(new Map());
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -43,7 +44,7 @@ export const SVGEditor = () => {
     canvas.on('selection:created', (e) => {
       if (mode === 'edit' && e.selected?.[0]) {
         const obj = e.selected[0] as FabricText;
-        const elementId = obj.data?.elementId;
+        const elementId = objectToElementMap.get(obj);
         if (elementId) {
           setSelectedElement(elementId);
         }
@@ -65,10 +66,10 @@ export const SVGEditor = () => {
     return () => {
       canvas.dispose();
     };
-  }, [mode]);
+  }, [mode, objectToElementMap]);
 
   const updateElementFromFabricObject = (obj: FabricText) => {
-    const elementId = obj.data?.elementId;
+    const elementId = objectToElementMap.get(obj);
     if (!elementId) return;
 
     setTextElements(prev => ({
@@ -98,6 +99,7 @@ export const SVGEditor = () => {
       const textElements = svgDoc.querySelectorAll('text');
       
       const extractedElements: Record<string, TextElement> = {};
+      const newObjectToElementMap = new Map<FabricText, string>();
       
       textElements.forEach((textEl, index) => {
         const id = textEl.id || `text-element-${index + 1}`;
@@ -107,6 +109,16 @@ export const SVGEditor = () => {
         const fontFamily = textEl.getAttribute('font-family') || 'Arial';
         const fill = textEl.getAttribute('fill') || '#000000';
         const text = textEl.textContent || '';
+
+        // Create Fabric text object
+        const fabricTextObj = new FabricText(text, {
+          left: x,
+          top: y,
+          fontSize: fontSize,
+          fontFamily: fontFamily,
+          fill: fill,
+          selectable: mode === 'edit',
+        });
 
         extractedElements[id] = {
           id,
@@ -118,17 +130,26 @@ export const SVGEditor = () => {
             color: fill,
           },
           text,
+          fabricObject: fabricTextObj,
         };
+
+        // Map the fabric object to element ID
+        newObjectToElementMap.set(fabricTextObj, id);
       });
 
       setTextElements(extractedElements);
+      setObjectToElementMap(newObjectToElementMap);
       
       // Load SVG into canvas
       if (fabricCanvas) {
-        fabricCanvas.loadFromJSON(svgText, () => {
-          fabricCanvas.renderAll();
-          toast.success(`Extracted ${Object.keys(extractedElements).length} text elements`);
+        fabricCanvas.clear();
+        Object.values(extractedElements).forEach(element => {
+          if (element.fabricObject) {
+            fabricCanvas.add(element.fabricObject);
+          }
         });
+        fabricCanvas.renderAll();
+        toast.success(`Extracted ${Object.keys(extractedElements).length} text elements`);
       }
     } catch (error) {
       toast.error('Failed to parse SVG file');
@@ -195,6 +216,12 @@ export const SVGEditor = () => {
     const element = textElements[id];
     if (element?.fabricObject && fabricCanvas) {
       fabricCanvas.remove(element.fabricObject);
+      // Remove from the map as well
+      setObjectToElementMap(prev => {
+        const newMap = new Map(prev);
+        newMap.delete(element.fabricObject!);
+        return newMap;
+      });
     }
     
     setTextElements(prev => {
@@ -214,6 +241,17 @@ export const SVGEditor = () => {
     if (textElements[newId]) {
       toast.error('Element with this ID already exists');
       return;
+    }
+
+    const element = textElements[oldId];
+    if (element?.fabricObject) {
+      // Update the map with new ID
+      setObjectToElementMap(prev => {
+        const newMap = new Map(prev);
+        newMap.delete(element.fabricObject!);
+        newMap.set(element.fabricObject!, newId);
+        return newMap;
+      });
     }
 
     setTextElements(prev => {
