@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Canvas as FabricCanvas, FabricText, util } from 'fabric';
+import { Canvas as FabricCanvas, FabricText, loadSVGFromString } from 'fabric';
 import { FileUpload } from './FileUpload';
 import { TextElementEditor } from './TextElementEditor';
 import { SchemaOutput } from './SchemaOutput';
@@ -158,7 +158,7 @@ export const SVGEditor = () => {
         fabricCanvas.clear();
         
         // First, load the entire SVG as background
-        util.loadSVGFromString(svgText).then((result) => {
+        loadSVGFromString(svgText).then((result) => {
           const svgObjects = result.objects;
           svgObjects.forEach(obj => {
             obj.selectable = false; // Make background elements non-selectable
