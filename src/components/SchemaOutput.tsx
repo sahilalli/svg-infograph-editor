@@ -17,6 +17,7 @@ export const SchemaOutput: React.FC<SchemaOutputProps> = ({ textElements }) => {
         svg_id: element.svgId,
         position: element.position,
         font: element.font,
+        text: element.text, // Include text content in schema
       };
     });
 

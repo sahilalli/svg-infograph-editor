@@ -93,22 +93,35 @@ export const SVGEditor = () => {
       const svgText = await file.text();
       setOriginalSVG(svgText);
       
+      console.log('SVG Text:', svgText);
+      
       // Parse SVG and extract text elements
       const parser = new DOMParser();
       const svgDoc = parser.parseFromString(svgText, 'image/svg+xml');
+      const svgElement = svgDoc.querySelector('svg');
       const textElements = svgDoc.querySelectorAll('text');
+      
+      console.log('Found text elements:', textElements.length);
       
       const extractedElements: Record<string, TextElement> = {};
       const newObjectToElementMap = new Map<FabricText, string>();
       
       textElements.forEach((textEl, index) => {
         const id = textEl.id || `text-element-${index + 1}`;
-        const x = parseFloat(textEl.getAttribute('x') || '0');
-        const y = parseFloat(textEl.getAttribute('y') || '0');
-        const fontSize = parseFloat(textEl.getAttribute('font-size') || '16');
-        const fontFamily = textEl.getAttribute('font-family') || 'Arial';
-        const fill = textEl.getAttribute('fill') || '#000000';
+        
+        // Parse position attributes more carefully
+        const xAttr = textEl.getAttribute('x') || textEl.getAttribute('dx') || '0';
+        const yAttr = textEl.getAttribute('y') || textEl.getAttribute('dy') || '0';
+        const x = parseFloat(xAttr);
+        const y = parseFloat(yAttr);
+        
+        // Parse font attributes
+        const fontSize = parseFloat(textEl.getAttribute('font-size') || textEl.style.fontSize || '16');
+        const fontFamily = textEl.getAttribute('font-family') || textEl.style.fontFamily || 'Arial';
+        const fill = textEl.getAttribute('fill') || textEl.style.fill || '#000000';
         const text = textEl.textContent || '';
+
+        console.log(`Element ${id}:`, { x, y, fontSize, fontFamily, fill, text });
 
         // Create Fabric text object
         const fabricTextObj = new FabricText(text, {
@@ -143,13 +156,36 @@ export const SVGEditor = () => {
       // Load SVG into canvas
       if (fabricCanvas) {
         fabricCanvas.clear();
-        Object.values(extractedElements).forEach(element => {
-          if (element.fabricObject) {
-            fabricCanvas.add(element.fabricObject);
-          }
+        
+        // First, load the entire SVG as background
+        util.loadSVGFromString(svgText).then((result) => {
+          const svgObjects = result.objects;
+          svgObjects.forEach(obj => {
+            obj.selectable = false; // Make background elements non-selectable
+            obj.evented = false; // Disable events for background
+            fabricCanvas.add(obj);
+          });
+          
+          // Then add our editable text objects on top
+          Object.values(extractedElements).forEach(element => {
+            if (element.fabricObject) {
+              fabricCanvas.add(element.fabricObject);
+            }
+          });
+          
+          fabricCanvas.renderAll();
+          toast.success(`Extracted ${Object.keys(extractedElements).length} text elements`);
+        }).catch(error => {
+          console.error('Error loading SVG:', error);
+          // Fallback: just add text elements
+          Object.values(extractedElements).forEach(element => {
+            if (element.fabricObject) {
+              fabricCanvas.add(element.fabricObject);
+            }
+          });
+          fabricCanvas.renderAll();
+          toast.success(`Extracted ${Object.keys(extractedElements).length} text elements`);
         });
-        fabricCanvas.renderAll();
-        toast.success(`Extracted ${Object.keys(extractedElements).length} text elements`);
       }
     } catch (error) {
       toast.error('Failed to parse SVG file');
@@ -165,6 +201,7 @@ export const SVGEditor = () => {
         svg_id: element.svgId,
         position: element.position,
         font: element.font,
+        text: element.text, // Include text content in schema
       };
     });
 
