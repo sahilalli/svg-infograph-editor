@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Canvas as FabricCanvas, FabricText, FabricImage } from 'fabric';
+import { Canvas as FabricCanvas, FabricText, loadSVGFromString } from 'fabric';
 import { FileUpload } from './FileUpload';
 import { TextElementEditor } from './TextElementEditor';
 import { SchemaOutput } from './SchemaOutput';
@@ -100,179 +100,126 @@ export const SVGEditor = () => {
       const svgText = await file.text();
       setOriginalSVG(svgText);
       
-      console.log('SVG Text length:', svgText.length);
-      console.log('SVG content preview:', svgText.substring(0, 500));
-      
-      // Clear canvas first
-      if (fabricCanvas) {
-        fabricCanvas.clear();
-        fabricCanvas.backgroundColor = '#ffffff';
-      }
+      console.log('SVG Text:', svgText);
       
       // Parse SVG and extract text elements
       const parser = new DOMParser();
       const svgDoc = parser.parseFromString(svgText, 'image/svg+xml');
       const svgElement = svgDoc.querySelector('svg');
+      const textElements = svgDoc.querySelectorAll('text');
       
-      if (!svgElement) {
-        toast.error('Invalid SVG file');
-        return;
-      }
+      console.log('Found text elements:', textElements.length);
+      console.log('SVG viewBox:', svgElement?.getAttribute('viewBox'));
+      console.log('SVG width:', svgElement?.getAttribute('width'));
+      console.log('SVG height:', svgElement?.getAttribute('height'));
       
-      // Get SVG dimensions for proper scaling
-      const viewBox = svgElement.getAttribute('viewBox');
-      const width = svgElement.getAttribute('width');
-      const height = svgElement.getAttribute('height');
+      const extractedElements: Record<string, TextElement> = {};
+      const newObjectToElementMap = new Map<FabricText, string>();
       
-      console.log('SVG dimensions:', { viewBox, width, height });
-      
-      // Create a background image from the SVG
-      const svgBlob = new Blob([svgText], { type: 'image/svg+xml' });
-      const svgUrl = URL.createObjectURL(svgBlob);
-      
-      const img = new Image();
-      img.onload = () => {
-        console.log('SVG image loaded successfully');
+      textElements.forEach((textEl, index) => {
+        const id = textEl.id || `text-element-${index + 1}`;
         
-        if (!fabricCanvas) return;
+        // Parse position attributes more carefully
+        const xAttr = textEl.getAttribute('x') || textEl.getAttribute('dx') || '0';
+        const yAttr = textEl.getAttribute('y') || textEl.getAttribute('dy') || '0';
+        const x = parseNumericAttribute(xAttr);
+        const y = parseNumericAttribute(yAttr);
         
-        // Create a Fabric image object from the SVG
-        FabricImage.fromURL(svgUrl).then((fabricImg) => {
-          // Scale the image to fit the canvas
-          const scaleX = fabricCanvas.width! / fabricImg.width!;
-          const scaleY = fabricCanvas.height! / fabricImg.height!;
-          const scale = Math.min(scaleX, scaleY);
+        // Parse font attributes
+        const fontSizeAttr = textEl.getAttribute('font-size') || 
+                            textEl.style.fontSize || 
+                            getComputedStyle(textEl).fontSize || '16';
+        const fontSize = parseNumericAttribute(fontSizeAttr);
+        
+        const fontFamily = textEl.getAttribute('font-family') || 
+                          textEl.style.fontFamily || 
+                          getComputedStyle(textEl).fontFamily || 'Arial';
+        
+        const fill = textEl.getAttribute('fill') || 
+                     textEl.style.fill || 
+                     getComputedStyle(textEl).fill || '#000000';
+        
+        const text = textEl.textContent || '';
+
+        console.log(`Element ${id}:`, { 
+          x, y, fontSize, fontFamily, fill, text,
+          rawX: xAttr, rawY: yAttr, rawFontSize: fontSizeAttr 
+        });
+
+        // Create Fabric text object
+        const fabricTextObj = new FabricText(text, {
+          left: x,
+          top: y,
+          fontSize: fontSize > 0 ? fontSize : 16,
+          fontFamily: fontFamily,
+          fill: fill,
+          selectable: mode === 'edit',
+        });
+
+        extractedElements[id] = {
+          id,
+          svgId: id,
+          position: { x, y },
+          font: {
+            size: fontSize > 0 ? fontSize : 16,
+            family: fontFamily,
+            color: fill,
+          },
+          text,
+          fabricObject: fabricTextObj,
+        };
+
+        // Map the fabric object to element ID
+        newObjectToElementMap.set(fabricTextObj, id);
+      });
+
+      setTextElements(extractedElements);
+      setObjectToElementMap(newObjectToElementMap);
+      
+      // Load SVG into canvas
+      if (fabricCanvas) {
+        fabricCanvas.clear();
+        
+        console.log('Loading SVG into canvas...');
+        
+        // First, load the entire SVG as background
+        loadSVGFromString(svgText).then((result) => {
+          console.log('SVG loaded successfully:', result);
           
-          fabricImg.set({
-            scaleX: scale,
-            scaleY: scale,
-            selectable: false,
-            evented: false,
-          });
-          
-          // Add as background by setting it as the first object
-          fabricCanvas.add(fabricImg);
-          
-          // Send to back using the correct method
-          fabricCanvas.sendObjectToBack(fabricImg);
-          
-          // Extract and add text elements
-          const textElements = svgDoc.querySelectorAll('text');
-          console.log('Found text elements:', textElements.length);
-          
-          const extractedElements: Record<string, TextElement> = {};
-          const newObjectToElementMap = new Map<FabricText, string>();
-          
-          textElements.forEach((textEl, index) => {
-            const id = textEl.id || `text-element-${index + 1}`;
-            
-            // Get all possible position attributes
-            let x = 0, y = 0;
-            
-            // Try different attribute combinations
-            const xAttr = textEl.getAttribute('x') || textEl.getAttribute('dx') || '0';
-            const yAttr = textEl.getAttribute('y') || textEl.getAttribute('dy') || '0';
-            
-            // Handle multiple values (space or comma separated)
-            const xValues = xAttr.split(/[\s,]+/).filter(v => v);
-            const yValues = yAttr.split(/[\s,]+/).filter(v => v);
-            
-            if (xValues.length > 0) {
-              x = parseNumericAttribute(xValues[0]);
-            }
-            if (yValues.length > 0) {
-              y = parseNumericAttribute(yValues[0]);
-            }
-            
-            // Check for transform attribute
-            const transform = textEl.getAttribute('transform');
-            if (transform) {
-              const translateMatch = transform.match(/translate\(([^,]+),?\s*([^)]*)\)/);
-              if (translateMatch) {
-                const tx = parseFloat(translateMatch[1]) || 0;
-                const ty = parseFloat(translateMatch[2]) || 0;
-                x += tx;
-                y += ty;
-              }
-            }
-            
-            // Get font properties
-            const fontSize = parseNumericAttribute(
-              textEl.getAttribute('font-size') || 
-              textEl.style.fontSize || 
-              '16'
-            );
-            
-            const fontFamily = textEl.getAttribute('font-family') || 
-                             textEl.style.fontFamily || 
-                             'Arial';
-            
-            const fill = textEl.getAttribute('fill') || 
-                        textEl.style.fill || 
-                        '#000000';
-            
-            const text = textEl.textContent || '';
-            
-            console.log(`Element ${id}:`, { 
-              x, y, fontSize, fontFamily, fill, text,
-              rawX: xAttr, rawY: yAttr, transform
+          if (result.objects && result.objects.length > 0) {
+            result.objects.forEach(obj => {
+              obj.selectable = false; // Make background elements non-selectable
+              obj.evented = false; // Disable events for background
+              fabricCanvas.add(obj);
             });
             
-            // Scale positions based on the same scale as the background image
-            const scaledX = x * scale;
-            const scaledY = y * scale;
-            const scaledFontSize = Math.max(fontSize * scale, 12); // Minimum font size of 12
-            
-            // Create Fabric text object
-            const fabricTextObj = new FabricText(text, {
-              left: scaledX,
-              top: scaledY,
-              fontSize: scaledFontSize,
-              fontFamily: fontFamily.replace(/["']/g, ''), // Remove quotes
-              fill: fill,
-              selectable: mode === 'edit',
-              strokeWidth: 0,
-            });
-            
-            extractedElements[id] = {
-              id,
-              svgId: id,
-              position: { x: scaledX, y: scaledY },
-              font: {
-                size: scaledFontSize,
-                family: fontFamily.replace(/["']/g, ''),
-                color: fill,
-              },
-              text,
-              fabricObject: fabricTextObj,
-            };
-            
-            // Map the fabric object to element ID
-            newObjectToElementMap.set(fabricTextObj, id);
-            
-            // Add text object to canvas
-            fabricCanvas.add(fabricTextObj);
-          });
+            console.log(`Added ${result.objects.length} SVG objects to canvas`);
+          } else {
+            console.log('No SVG objects found in result');
+          }
           
-          setTextElements(extractedElements);
-          setObjectToElementMap(newObjectToElementMap);
+          // Then add our editable text objects on top
+          Object.values(extractedElements).forEach(element => {
+            if (element.fabricObject) {
+              fabricCanvas.add(element.fabricObject);
+            }
+          });
           
           fabricCanvas.renderAll();
-          toast.success(`SVG loaded! Found ${Object.keys(extractedElements).length} text elements`);
+          toast.success(`SVG loaded! Extracted ${Object.keys(extractedElements).length} text elements`);
+        }).catch(error => {
+          console.error('Error loading SVG:', error);
           
-          // Clean up the blob URL
-          URL.revokeObjectURL(svgUrl);
+          // Fallback: just add text elements without SVG background
+          Object.values(extractedElements).forEach(element => {
+            if (element.fabricObject) {
+              fabricCanvas.add(element.fabricObject);
+            }
+          });
+          fabricCanvas.renderAll();
+          toast.warning(`SVG background failed to load, but extracted ${Object.keys(extractedElements).length} text elements`);
         });
-      };
-      
-      img.onerror = () => {
-        console.error('Failed to load SVG as image');
-        toast.error('Failed to load SVG background');
-        URL.revokeObjectURL(svgUrl);
-      };
-      
-      img.src = svgUrl;
-      
+      }
     } catch (error) {
       toast.error('Failed to parse SVG file');
       console.error('SVG parsing error:', error);
