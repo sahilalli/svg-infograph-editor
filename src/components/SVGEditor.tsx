@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Canvas as FabricCanvas, FabricText, util } from 'fabric';
+import { Canvas as FabricCanvas, FabricText, FabricImage } from 'fabric';
 import { FileUpload } from './FileUpload';
 import { TextElementEditor } from './TextElementEditor';
 import { SchemaOutput } from './SchemaOutput';
@@ -136,122 +136,131 @@ export const SVGEditor = () => {
         
         if (!fabricCanvas) return;
         
-        // Add the SVG as a background image
-        fabricCanvas.setBackgroundImage(svgUrl, fabricCanvas.renderAll.bind(fabricCanvas), {
-          scaleX: fabricCanvas.width! / img.width,
-          scaleY: fabricCanvas.height! / img.height,
-        });
-        
-        // Extract and add text elements
-        const textElements = svgDoc.querySelectorAll('text');
-        console.log('Found text elements:', textElements.length);
-        
-        const extractedElements: Record<string, TextElement> = {};
-        const newObjectToElementMap = new Map<FabricText, string>();
-        
-        textElements.forEach((textEl, index) => {
-          const id = textEl.id || `text-element-${index + 1}`;
+        // Create a Fabric image object from the SVG
+        FabricImage.fromURL(svgUrl).then((fabricImg) => {
+          // Scale the image to fit the canvas
+          const scaleX = fabricCanvas.width! / fabricImg.width!;
+          const scaleY = fabricCanvas.height! / fabricImg.height!;
+          const scale = Math.min(scaleX, scaleY);
           
-          // Get all possible position attributes
-          let x = 0, y = 0;
+          fabricImg.set({
+            scaleX: scale,
+            scaleY: scale,
+            selectable: false,
+            evented: false,
+          });
           
-          // Try different attribute combinations
-          const xAttr = textEl.getAttribute('x') || textEl.getAttribute('dx') || '0';
-          const yAttr = textEl.getAttribute('y') || textEl.getAttribute('dy') || '0';
+          // Add as background by setting it as the first object
+          fabricCanvas.add(fabricImg);
+          fabricImg.sendToBack();
           
-          // Handle multiple values (space or comma separated)
-          const xValues = xAttr.split(/[\s,]+/).filter(v => v);
-          const yValues = yAttr.split(/[\s,]+/).filter(v => v);
+          // Extract and add text elements
+          const textElements = svgDoc.querySelectorAll('text');
+          console.log('Found text elements:', textElements.length);
           
-          if (xValues.length > 0) {
-            x = parseNumericAttribute(xValues[0]);
-          }
-          if (yValues.length > 0) {
-            y = parseNumericAttribute(yValues[0]);
-          }
+          const extractedElements: Record<string, TextElement> = {};
+          const newObjectToElementMap = new Map<FabricText, string>();
           
-          // Check for transform attribute
-          const transform = textEl.getAttribute('transform');
-          if (transform) {
-            const translateMatch = transform.match(/translate\(([^,]+),?\s*([^)]*)\)/);
-            if (translateMatch) {
-              const tx = parseFloat(translateMatch[1]) || 0;
-              const ty = parseFloat(translateMatch[2]) || 0;
-              x += tx;
-              y += ty;
+          textElements.forEach((textEl, index) => {
+            const id = textEl.id || `text-element-${index + 1}`;
+            
+            // Get all possible position attributes
+            let x = 0, y = 0;
+            
+            // Try different attribute combinations
+            const xAttr = textEl.getAttribute('x') || textEl.getAttribute('dx') || '0';
+            const yAttr = textEl.getAttribute('y') || textEl.getAttribute('dy') || '0';
+            
+            // Handle multiple values (space or comma separated)
+            const xValues = xAttr.split(/[\s,]+/).filter(v => v);
+            const yValues = yAttr.split(/[\s,]+/).filter(v => v);
+            
+            if (xValues.length > 0) {
+              x = parseNumericAttribute(xValues[0]);
             }
-          }
-          
-          // Get font properties
-          const fontSize = parseNumericAttribute(
-            textEl.getAttribute('font-size') || 
-            textEl.style.fontSize || 
-            '16'
-          );
-          
-          const fontFamily = textEl.getAttribute('font-family') || 
-                           textEl.style.fontFamily || 
-                           'Arial';
-          
-          const fill = textEl.getAttribute('fill') || 
-                      textEl.style.fill || 
-                      '#000000';
-          
-          const text = textEl.textContent || '';
-          
-          console.log(`Element ${id}:`, { 
-            x, y, fontSize, fontFamily, fill, text,
-            rawX: xAttr, rawY: yAttr, transform
+            if (yValues.length > 0) {
+              y = parseNumericAttribute(yValues[0]);
+            }
+            
+            // Check for transform attribute
+            const transform = textEl.getAttribute('transform');
+            if (transform) {
+              const translateMatch = transform.match(/translate\(([^,]+),?\s*([^)]*)\)/);
+              if (translateMatch) {
+                const tx = parseFloat(translateMatch[1]) || 0;
+                const ty = parseFloat(translateMatch[2]) || 0;
+                x += tx;
+                y += ty;
+              }
+            }
+            
+            // Get font properties
+            const fontSize = parseNumericAttribute(
+              textEl.getAttribute('font-size') || 
+              textEl.style.fontSize || 
+              '16'
+            );
+            
+            const fontFamily = textEl.getAttribute('font-family') || 
+                             textEl.style.fontFamily || 
+                             'Arial';
+            
+            const fill = textEl.getAttribute('fill') || 
+                        textEl.style.fill || 
+                        '#000000';
+            
+            const text = textEl.textContent || '';
+            
+            console.log(`Element ${id}:`, { 
+              x, y, fontSize, fontFamily, fill, text,
+              rawX: xAttr, rawY: yAttr, transform
+            });
+            
+            // Scale positions based on the same scale as the background image
+            const scaledX = x * scale;
+            const scaledY = y * scale;
+            const scaledFontSize = Math.max(fontSize * scale, 12); // Minimum font size of 12
+            
+            // Create Fabric text object
+            const fabricTextObj = new FabricText(text, {
+              left: scaledX,
+              top: scaledY,
+              fontSize: scaledFontSize,
+              fontFamily: fontFamily.replace(/["']/g, ''), // Remove quotes
+              fill: fill,
+              selectable: mode === 'edit',
+              strokeWidth: 0,
+            });
+            
+            extractedElements[id] = {
+              id,
+              svgId: id,
+              position: { x: scaledX, y: scaledY },
+              font: {
+                size: scaledFontSize,
+                family: fontFamily.replace(/["']/g, ''),
+                color: fill,
+              },
+              text,
+              fabricObject: fabricTextObj,
+            };
+            
+            // Map the fabric object to element ID
+            newObjectToElementMap.set(fabricTextObj, id);
+            
+            // Add text object to canvas
+            fabricCanvas.add(fabricTextObj);
           });
           
-          // Scale positions based on canvas size if viewBox is present
-          if (viewBox) {
-            const [vx, vy, vw, vh] = viewBox.split(' ').map(Number);
-            const scaleX = fabricCanvas.width! / vw;
-            const scaleY = fabricCanvas.height! / vh;
-            x = (x - vx) * scaleX;
-            y = (y - vy) * scaleY;
-          }
+          setTextElements(extractedElements);
+          setObjectToElementMap(newObjectToElementMap);
           
-          // Create Fabric text object
-          const fabricTextObj = new FabricText(text, {
-            left: x,
-            top: y,
-            fontSize: fontSize > 0 ? fontSize : 16,
-            fontFamily: fontFamily.replace(/["']/g, ''), // Remove quotes
-            fill: fill,
-            selectable: mode === 'edit',
-            strokeWidth: 0,
-          });
+          fabricCanvas.renderAll();
+          toast.success(`SVG loaded! Found ${Object.keys(extractedElements).length} text elements`);
           
-          extractedElements[id] = {
-            id,
-            svgId: id,
-            position: { x, y },
-            font: {
-              size: fontSize > 0 ? fontSize : 16,
-              family: fontFamily.replace(/["']/g, ''),
-              color: fill,
-            },
-            text,
-            fabricObject: fabricTextObj,
-          };
-          
-          // Map the fabric object to element ID
-          newObjectToElementMap.set(fabricTextObj, id);
-          
-          // Add text object to canvas
-          fabricCanvas.add(fabricTextObj);
+          // Clean up the blob URL
+          URL.revokeObjectURL(svgUrl);
         });
-        
-        setTextElements(extractedElements);
-        setObjectToElementMap(newObjectToElementMap);
-        
-        fabricCanvas.renderAll();
-        toast.success(`SVG loaded! Found ${Object.keys(extractedElements).length} text elements`);
-        
-        // Clean up the blob URL
-        URL.revokeObjectURL(svgUrl);
       };
       
       img.onerror = () => {
