@@ -152,7 +152,9 @@ export const SVGEditor = () => {
           
           // Add as background by setting it as the first object
           fabricCanvas.add(fabricImg);
-          fabricImg.sendToBack();
+          
+          // Send to back using the correct method
+          fabricCanvas.sendObjectToBack(fabricImg);
           
           // Extract and add text elements
           const textElements = svgDoc.querySelectorAll('text');
