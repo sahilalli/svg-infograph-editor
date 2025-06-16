@@ -88,6 +88,13 @@ export const SVGEditor = () => {
     }));
   };
 
+  const parseNumericAttribute = (value: string | null): number => {
+    if (!value) return 0;
+    // Remove any units like 'px', 'em', etc. and parse as float
+    const numericValue = parseFloat(value.replace(/[^0-9.-]/g, ''));
+    return isNaN(numericValue) ? 0 : numericValue;
+  };
+
   const handleSVGUpload = async (file: File) => {
     try {
       const svgText = await file.text();
@@ -102,6 +109,9 @@ export const SVGEditor = () => {
       const textElements = svgDoc.querySelectorAll('text');
       
       console.log('Found text elements:', textElements.length);
+      console.log('SVG viewBox:', svgElement?.getAttribute('viewBox'));
+      console.log('SVG width:', svgElement?.getAttribute('width'));
+      console.log('SVG height:', svgElement?.getAttribute('height'));
       
       const extractedElements: Record<string, TextElement> = {};
       const newObjectToElementMap = new Map<FabricText, string>();
@@ -112,22 +122,35 @@ export const SVGEditor = () => {
         // Parse position attributes more carefully
         const xAttr = textEl.getAttribute('x') || textEl.getAttribute('dx') || '0';
         const yAttr = textEl.getAttribute('y') || textEl.getAttribute('dy') || '0';
-        const x = parseFloat(xAttr);
-        const y = parseFloat(yAttr);
+        const x = parseNumericAttribute(xAttr);
+        const y = parseNumericAttribute(yAttr);
         
         // Parse font attributes
-        const fontSize = parseFloat(textEl.getAttribute('font-size') || textEl.style.fontSize || '16');
-        const fontFamily = textEl.getAttribute('font-family') || textEl.style.fontFamily || 'Arial';
-        const fill = textEl.getAttribute('fill') || textEl.style.fill || '#000000';
+        const fontSizeAttr = textEl.getAttribute('font-size') || 
+                            textEl.style.fontSize || 
+                            getComputedStyle(textEl).fontSize || '16';
+        const fontSize = parseNumericAttribute(fontSizeAttr);
+        
+        const fontFamily = textEl.getAttribute('font-family') || 
+                          textEl.style.fontFamily || 
+                          getComputedStyle(textEl).fontFamily || 'Arial';
+        
+        const fill = textEl.getAttribute('fill') || 
+                     textEl.style.fill || 
+                     getComputedStyle(textEl).fill || '#000000';
+        
         const text = textEl.textContent || '';
 
-        console.log(`Element ${id}:`, { x, y, fontSize, fontFamily, fill, text });
+        console.log(`Element ${id}:`, { 
+          x, y, fontSize, fontFamily, fill, text,
+          rawX: xAttr, rawY: yAttr, rawFontSize: fontSizeAttr 
+        });
 
         // Create Fabric text object
         const fabricTextObj = new FabricText(text, {
           left: x,
           top: y,
-          fontSize: fontSize,
+          fontSize: fontSize > 0 ? fontSize : 16,
           fontFamily: fontFamily,
           fill: fill,
           selectable: mode === 'edit',
@@ -138,7 +161,7 @@ export const SVGEditor = () => {
           svgId: id,
           position: { x, y },
           font: {
-            size: fontSize,
+            size: fontSize > 0 ? fontSize : 16,
             family: fontFamily,
             color: fill,
           },
@@ -157,14 +180,23 @@ export const SVGEditor = () => {
       if (fabricCanvas) {
         fabricCanvas.clear();
         
+        console.log('Loading SVG into canvas...');
+        
         // First, load the entire SVG as background
         loadSVGFromString(svgText).then((result) => {
-          const svgObjects = result.objects;
-          svgObjects.forEach(obj => {
-            obj.selectable = false; // Make background elements non-selectable
-            obj.evented = false; // Disable events for background
-            fabricCanvas.add(obj);
-          });
+          console.log('SVG loaded successfully:', result);
+          
+          if (result.objects && result.objects.length > 0) {
+            result.objects.forEach(obj => {
+              obj.selectable = false; // Make background elements non-selectable
+              obj.evented = false; // Disable events for background
+              fabricCanvas.add(obj);
+            });
+            
+            console.log(`Added ${result.objects.length} SVG objects to canvas`);
+          } else {
+            console.log('No SVG objects found in result');
+          }
           
           // Then add our editable text objects on top
           Object.values(extractedElements).forEach(element => {
@@ -174,17 +206,18 @@ export const SVGEditor = () => {
           });
           
           fabricCanvas.renderAll();
-          toast.success(`Extracted ${Object.keys(extractedElements).length} text elements`);
+          toast.success(`SVG loaded! Extracted ${Object.keys(extractedElements).length} text elements`);
         }).catch(error => {
           console.error('Error loading SVG:', error);
-          // Fallback: just add text elements
+          
+          // Fallback: just add text elements without SVG background
           Object.values(extractedElements).forEach(element => {
             if (element.fabricObject) {
               fabricCanvas.add(element.fabricObject);
             }
           });
           fabricCanvas.renderAll();
-          toast.success(`Extracted ${Object.keys(extractedElements).length} text elements`);
+          toast.warning(`SVG background failed to load, but extracted ${Object.keys(extractedElements).length} text elements`);
         });
       }
     } catch (error) {
@@ -201,7 +234,7 @@ export const SVGEditor = () => {
         svg_id: element.svgId,
         position: element.position,
         font: element.font,
-        text: element.text, // Include text content in schema
+        text: element.text,
       };
     });
 
